@@ -1,8 +1,9 @@
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Card } from "@/components/ui/card";
-import { toast } from "@/components/ui/use-toast";
+import { toast } from "@/hooks/use-toast";
+import { APIKeyDialog } from "@/components/APIKeyDialog";
 import { 
   Play, 
   Pause, 
@@ -42,7 +43,25 @@ export function TTSMain({ selectedVoice, selectedModel, speed, text, setText }: 
   const [isGenerating, setIsGenerating] = useState(false);
   const [isPlaying, setIsPlaying] = useState(false);
   const [audioUrl, setAudioUrl] = useState<string | null>(null);
+  const [showAPIKeyDialog, setShowAPIKeyDialog] = useState(false);
+  const [apiKey, setApiKey] = useState<string | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
+
+  useEffect(() => {
+    const savedApiKey = localStorage.getItem('openai_api_key');
+    if (savedApiKey) {
+      setApiKey(savedApiKey);
+    }
+  }, []);
+
+  const handleSaveApiKey = (key: string) => {
+    localStorage.setItem('openai_api_key', key);
+    setApiKey(key);
+    toast({
+      title: "API Key Saved",
+      description: "Your OpenAI API key has been saved securely.",
+    });
+  };
 
   const handleGenerate = async () => {
     if (!text.trim()) {
@@ -54,24 +73,51 @@ export function TTSMain({ selectedVoice, selectedModel, speed, text, setText }: 
       return;
     }
 
+    if (!apiKey) {
+      setShowAPIKeyDialog(true);
+      return;
+    }
+
     setIsGenerating(true);
     try {
-      // Here you would integrate with OpenAI's TTS API
-      // For now, we'll simulate the API call
-      await new Promise(resolve => setTimeout(resolve, 2000));
+      console.log("Generating speech with:", { selectedVoice, selectedModel, speed: speed[0], textLength: text.length });
       
-      // Simulate successful generation
-      const mockAudioUrl = "data:audio/wav;base64,UklGRnoGAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQoGAACBhYqFbF1fdJivrJBhNjVgodDbq2EcBj+a2/LDciUFLIHO8tiJNwgZaLvt559NEAxQp+PwtmMcBjiR1/LMeSwFJHfH8N2QQAoUXrTp66hVFApGn+jqul4XBSZWkuXdVCIcAAmjJ1Z7V0NDjLWPqzFaFElMnM/Km10VCz6Fx+LUeS4BL3XH797Dggoq1c8b+FvjQ2ub9JBmCxBWqN72s2AbCDqH1Oq7dCoCMHHL6+fFeA0LJM7O8dqXRAwWUqLk7a9SFAg7jNjz1X0qBC50yNrs0n8vBSiX4dbkjgAJC85h+";
-      setAudioUrl(mockAudioUrl);
+      const response = await fetch('https://api.openai.com/v1/audio/speech', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${apiKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          model: selectedModel,
+          input: text,
+          voice: selectedVoice,
+          speed: speed[0],
+        }),
+      });
+
+      if (!response.ok) {
+        if (response.status === 401) {
+          throw new Error('Invalid API key. Please check your OpenAI API key.');
+        }
+        throw new Error(`API request failed with status ${response.status}`);
+      }
+
+      const audioBlob = await response.blob();
+      const audioUrl = URL.createObjectURL(audioBlob);
+      setAudioUrl(audioUrl);
+      
+      console.log("Speech generation successful, audio URL created");
       
       toast({
         title: "Speech generated successfully!",
         description: "You can now play or download your audio.",
       });
     } catch (error) {
+      console.error("Speech generation error:", error);
       toast({
         title: "Failed to generate speech",
-        description: "Please check your API key and try again.",
+        description: error instanceof Error ? error.message : "Please check your API key and try again.",
         variant: "destructive",
       });
     } finally {
@@ -85,7 +131,14 @@ export function TTSMain({ selectedVoice, selectedModel, speed, text, setText }: 
         audioRef.current.pause();
         setIsPlaying(false);
       } else {
-        audioRef.current.play();
+        audioRef.current.play().catch((error) => {
+          console.error("Audio playback failed:", error);
+          toast({
+            title: "Playback failed",
+            description: "Unable to play the audio. Please try generating again.",
+            variant: "destructive",
+          });
+        });
         setIsPlaying(true);
       }
     }
@@ -95,10 +148,15 @@ export function TTSMain({ selectedVoice, selectedModel, speed, text, setText }: 
     if (audioUrl) {
       const link = document.createElement('a');
       link.href = audioUrl;
-      link.download = 'speech.mp3';
+      link.download = `speech-${Date.now()}.mp3`;
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
+      
+      toast({
+        title: "Download started",
+        description: "Your audio file is being downloaded.",
+      });
     }
   };
 
@@ -207,8 +265,39 @@ export function TTSMain({ selectedVoice, selectedModel, speed, text, setText }: 
             ref={audioRef}
             src={audioUrl}
             onEnded={() => setIsPlaying(false)}
+            onError={(e) => {
+              console.error("Audio error:", e);
+              toast({
+                title: "Audio error",
+                description: "There was an issue with the audio file.",
+                variant: "destructive",
+              });
+            }}
             className="hidden"
           />
+        )}
+
+        {/* API Key Dialog */}
+        <APIKeyDialog
+          open={showAPIKeyDialog}
+          onOpenChange={setShowAPIKeyDialog}
+          onSave={handleSaveApiKey}
+        />
+
+        {/* API Key Status */}
+        {!apiKey && (
+          <div className="fixed bottom-4 right-4 bg-card border border-border rounded-lg p-3 shadow-lg">
+            <p className="text-sm text-muted-foreground mb-2">
+              OpenAI API key required for text-to-speech
+            </p>
+            <Button
+              size="sm"
+              onClick={() => setShowAPIKeyDialog(true)}
+              className="w-full"
+            >
+              Add API Key
+            </Button>
+          </div>
         )}
       </div>
     </div>
